@@ -1,0 +1,318 @@
+* {
+  font-family: system-ui, sans-serif;
+  box-sizing: border-box;
+}
+
+.app-shell {
+  display: flex;
+  height: 100vh;
+}
+
+/* --- Sidebar --- */
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: #1e1b2e;
+  color: white;
+  padding: 1.75rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2.5rem;
+}
+
+.sidebar-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.sidebar-nav button {
+  text-align: left;
+  padding: 0.65rem 0.9rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #c7c2db;
+  cursor: pointer;
+  font-size: 0.95rem;
+  transition: background 0.15s ease;
+}
+
+.sidebar-nav button:hover {
+  background: #2d2942;
+}
+
+.sidebar-nav button.active {
+  background: #4c3fa3;
+  color: white;
+  font-weight: 600;
+}
+
+/* --- Main content --- */
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.empty-hint {
+  color: #888;
+  font-style: italic;
+}
+
+/* --- Notes view --- */
+
+.notes-view {
+  padding: 2rem 2.5rem;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.75rem;
+}
+
+.notes-header button {
+  padding: 0.6rem 1.1rem;
+  border: none;
+  border-radius: 8px;
+  background: #4c3fa3;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.notes-header button:hover {
+  background: #423693;
+}
+
+.notes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.25rem;
+}
+
+.note-card {
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  padding: 1.25rem;
+  background: white;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.15s ease;
+}
+
+.note-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.note-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.note-card p {
+  margin: 0 0 1rem;
+  color: #555;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.note-date {
+  font-size: 0.75rem;
+  color: #999;
+}
+
+.add-note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  max-width: 520px;
+  margin-bottom: 1.75rem;
+  padding: 1.25rem;
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  background: white;
+}
+
+.add-note-form input,
+.add-note-form textarea {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.add-note-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.add-note-form-actions button {
+  padding: 0.55rem 1.1rem;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.add-note-form-actions button[type="submit"] {
+  background: #4c3fa3;
+  color: white;
+}
+
+.add-note-form-actions button[type="submit"]:hover:not(:disabled) {
+  background: #423693;
+}
+
+.add-note-form-actions button[type="submit"]:disabled {
+  background: #ccc;
+  cursor: default;
+}
+
+.add-note-form-actions button[type="button"] {
+  background: #eee;
+}
+
+.add-note-form-actions button[type="button"]:hover {
+  background: #e2e2e2;
+}
+
+/* --- Chat view --- */
+/* Fills the full remaining viewport: header, then a scrollable message
+   list that grows to take all available space, then the input row
+   pinned to the bottom — this is what makes the chat feel "full screen"
+   instead of a small centered box. */
+
+.chat-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem 2.5rem;
+}
+
+.chat-view h1 {
+  flex-shrink: 0;
+  margin-bottom: 1rem;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  background: white;
+}
+
+.message {
+  padding: 0.65rem 0.9rem;
+  border-radius: 10px;
+  max-width: 80%;
+}
+
+.message.user {
+  background: #4c3fa3;
+  color: white;
+  align-self: flex-end;
+}
+
+.message.user .role-label {
+  color: #d8d3ee;
+}
+
+.message.assistant {
+  background: #f2f1f6;
+  align-self: flex-start;
+}
+
+.role-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #888;
+  margin-bottom: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.content {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.sources {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.input-row {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.6rem;
+}
+
+.input-row input {
+  flex: 1;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 0.95rem;
+}
+
+.input-row input:focus {
+  outline: none;
+  border-color: #4c3fa3;
+}
+
+.input-row button {
+  padding: 0.75rem 1.4rem;
+  border: none;
+  border-radius: 8px;
+  background: #4c3fa3;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.input-row button:hover:not(:disabled) {
+  background: #423693;
+}
+
+.input-row button:disabled {
+  background: #ccc;
+  cursor: default;
+}

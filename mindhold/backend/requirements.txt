@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+asyncpg
+pgvector
+httpx
+langchain-groq
+langchain-text-splitters
+pydantic-settings

@@ -1,0 +1,12 @@
+langchain
+langchain-groq
+langchain-core
+langchain-community
+langchain-huggingface
+langchain-text-splitters
+sentence-transformers
+faiss-cpu
+numpy<2
+python-dotenv
+langgraph
+rank-bm25

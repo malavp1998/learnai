@@ -1,0 +1,21 @@
+A Brief History of the Internet
+
+The origins of the internet trace back to ARPANET, a project funded by the United
+States Department of Defense in 1969. ARPANET connected computers at four universities
+and was designed to allow research institutions to share computing resources and
+survive network failures.
+
+In 1983, ARPANET adopted the TCP/IP protocol suite, which became the standard method
+for computers to communicate across interconnected networks. This transition is often
+considered the technical birth of the modern internet.
+
+Tim Berners-Lee invented the World Wide Web in 1989 while working at CERN. The Web
+introduced the concept of hyperlinks and web pages, making the internet accessible to
+non-technical users for the first time. The first website went live in 1991.
+
+The 1990s saw rapid commercialization of the internet, with the rise of browsers like
+Netscape Navigator and search engines like Yahoo and later Google, founded in 1998.
+
+Broadband internet began replacing dial-up connections in the early 2000s, enabling
+richer multimedia content, video streaming, and eventually the rise of social media
+platforms and cloud computing in the following decades.

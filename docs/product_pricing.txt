@@ -1,0 +1,19 @@
+CloudSync Pricing Plans
+
+CloudSync offers three subscription tiers: Starter, Pro, and Enterprise.
+
+The Starter plan costs ₹499 per month and includes 50GB of storage, support for up to
+3 connected devices, and standard email support with a 48-hour response time.
+
+The Pro plan costs ₹1,499 per month and includes 500GB of storage, support for up to 10
+connected devices, priority email support with a 12-hour response time, and access to
+version history for the last 30 days.
+
+The Enterprise plan is custom-priced based on team size, starting at ₹4,999 per month
+for teams of up to 25 users. It includes unlimited storage, unlimited devices, a dedicated
+account manager, 24/7 phone support, single sign-on (SSO), and unlimited version history.
+
+All plans come with a 14-day free trial, no credit card required. Annual billing gives a
+20% discount compared to monthly billing on all plans. Refunds are available within 30
+days of purchase for annual plans only; monthly plans are non-refundable but can be
+cancelled anytime.

@@ -1,0 +1,29 @@
+# Runs Postgres WITH the pgvector extension pre-installed (pgvector/pgvector
+# image = official Postgres + the pgvector extension baked in). This gives us
+# a real, persistent vector database, instead of the in-memory FAISS index
+# used in ../06_rag_basics.py.
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down          (data persists in the named volume)
+# Wipe:   docker compose down -v       (deletes the volume = deletes all data)
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: mindhold_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mindhold
+      POSTGRES_PASSWORD: mindhold
+      POSTGRES_DB: mindhold
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mindhold -d mindhold"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

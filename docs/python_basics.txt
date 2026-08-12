@@ -1,0 +1,24 @@
+Python Programming Basics
+
+Python is a high-level, interpreted programming language known for its readable syntax.
+It supports multiple programming paradigms including procedural, object-oriented, and
+functional programming.
+
+Variables in Python are dynamically typed, meaning you don't need to declare a type
+when creating one. For example, writing x = 5 creates an integer, and later writing
+x = "hello" reassigns x to a string without any error.
+
+Python's most common built-in data structures are lists, tuples, dictionaries, and sets.
+Lists are ordered and mutable, written with square brackets like [1, 2, 3]. Tuples are
+ordered but immutable, written with parentheses like (1, 2, 3). Dictionaries store
+key-value pairs using curly braces, like {"name": "Alice", "age": 30}. Sets store
+unique unordered elements and are also written with curly braces.
+
+Functions are defined using the def keyword. Python supports default arguments,
+keyword arguments, *args for variable positional arguments, and **kwargs for variable
+keyword arguments.
+
+Python uses indentation (whitespace) instead of curly braces to define code blocks,
+which is a distinctive feature compared to languages like Java or C++. The standard
+convention is 4 spaces per indentation level, as defined in PEP 8, Python's official
+style guide.
