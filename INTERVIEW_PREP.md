@@ -648,6 +648,27 @@ def run_agent(task, max_steps=6):
 
 ---
 
+## PART 8 — File 15: when changing the PROMPT (or what you retrieve for it) isn't enough
+
+Files 01-14 never touched a model's WEIGHTS — every technique so far works by changing what you SEND the model (prompting) or what you FETCH for it first (RAG). File 15 is the one place this project trains something.
+
+**The three levers, in the order you should actually reach for them:**
+1. **PROMPTING** — cheapest, fastest, most flexible. Always try this first.
+2. **RAG** — when the model needs FACTS it wasn't trained on, and those facts change over time (files 06-11).
+3. **FINE-TUNING** — when the model needs a new SKILL/FORMAT/STYLE no amount of prompting reliably produces, and that skill is stable enough to be worth baking in.
+
+Fine-tuning is the expensive, hard-to-update, easy-to-get-wrong option — it's the LAST resort, not the first idea. This ordering is the single most common thing interviewers probe for: do you reach for fine-tuning by default (bad sign), or only once prompting and RAG have genuinely been ruled out (correct instinct)?
+
+**Full fine-tuning vs. LoRA vs. QLoRA:** full fine-tuning updates every weight in the model — for a 7B-parameter model that's 80GB+ of GPU memory just for gradients/optimizer state, far beyond a free-tier GPU. LoRA freezes the entire original model and trains a small pair of new matrices ADDED to a few layers — you're training roughly 0.1-1% of the original parameter count, which is why LoRA fits on a free Colab GPU in minutes. QLoRA adds one more trick: the frozen base model is loaded in 4-bit quantization (compressed weights) instead of full precision, cutting memory further — that's the piece that makes even a 7B model fit on a free T4's ~15GB at all.
+
+**Why file 15 is structured differently from every other file:** it's written for Google Colab's free GPU tier, not local execution — this project's dev machine has no GPU, and fine-tuning even a small model on CPU is impractically slow for learning purposes. The code is real (Hugging Face `transformers` + `peft` + `trl`), organized into `# COLAB CELL N` blocks meant to be pasted into a notebook and run in order, not run as `python 15_fine_tuning.py` locally.
+
+**The toy dataset (and why it deliberately demonstrates a real failure mode):** 5 hand-written (question, formatted-answer) pairs teaching a strict `"Answer: ... | Policy section: ..."` format, sourced from the same `docs/company_leave_policy.txt` file 06's RAG pipeline retrieves from — letting you directly compare a RAG answer and a fine-tuned answer to the SAME underlying question. A real fine-tuning run needs hundreds-to-thousands of examples; with only 5, the model is likely to MEMORIZE those exact Q&As rather than learn the general format — a live, visible instance of overfitting, called out explicitly in the file rather than hidden.
+
+**What file 15 explicitly leaves for further reading, not implemented:** held-out evaluation sets (the generation-side analog of file 09's golden set), catastrophic forgetting (fine-tuning narrowly can degrade unrelated general abilities — LoRA limits but doesn't eliminate this), hyperparameter tuning (`r`, `learning_rate`, `epochs` all meaningfully affect whether training converges at all), merging LoRA weights for deployment vs. keeping them as a separate adapter, and RLHF/DPO — a DIFFERENT, more advanced fine-tuning family that learns from human PREFERENCES between candidate outputs rather than fixed (input, correct output) pairs, which is how the chat/instruction-following models this whole project calls via Groq were themselves trained on top of supervised fine-tuning.
+
+---
+
 ## THE WHOLE STORY, COMPRESSED TO ONE PARAGRAPH (memorize this)
 
 *"We started with a raw LLM call — no memory, no data, no actions. We gave it memory by resending history every turn, and structure via prompt templates + parsers. We gave it hands via tool calling, and learned the hard way that a single round-trip lets it fake tool results by guessing — so we built a proper loop that only trusts REAL results. We gave it OUR data via RAG — chunk, embed, retrieve, stuff into the prompt. Then we discovered naive RAG has three independent failure points: the retrieval METHOD is one-eyed (fixed with hybrid search + RRF), the RANKING never reads query and document together (fixed with cross-encoder reranking, cheap-wide-then-expensive-narrow), and the QUERY itself can be bad (fixed with rewriting, decomposition, and HyDE). We had no way to prove any of these fixes actually helped — so we built a golden test set and retrieval metrics (Precision/Recall/MRR/Hit Rate), and separately, LLM-as-judge metrics (RAGAS) to score the GENERATED ANSWER's faithfulness, not just retrieval. Then we admitted our data source — user-submitted notes — can't be trusted, so we built prompt-injection defense and PII redaction, first hand-rolled then with production libraries (LLM Guard, Presidio). Finally we generalized 'LLM decides, code executes' beyond a single straight loop: LangGraph for branching/looping/multi-agent coordination via shared state, and an agent harness for when the tools have REAL consequences and need a permission gate before anything executes."*
@@ -801,6 +822,32 @@ A: No — approval should be necessary but not sufficient. A denylist of destruc
 **Q: What does a minimal/toy harness leave out compared to a production one?**
 A: Sandboxing (isolating tool execution from the host process/filesystem), configurable permission MODES (rather than one fixed auto-approved set), audit logging, cost/token tracking across long sessions, and a much broader tool set (web search, browser control, structured diffing).
 
+## Stage 7 — Fine-tuning (changing weights, not prompts)
+
+**Q: When would you fine-tune a model instead of using RAG or better prompting?**
+A: Only after prompting and RAG have been genuinely ruled out. Fine-tune when the model needs a NEW SKILL, FORMAT, or STYLE that no amount of prompting reliably produces, and that skill is stable enough to be worth the cost of training and re-training whenever it needs to change. If the actual problem is "the model doesn't know some facts," that's RAG's job, not fine-tuning's — fine-tuning doesn't make a model's factual knowledge more current or citable the way retrieval does.
+
+**Q: What's the difference between full fine-tuning and LoRA?**
+A: Full fine-tuning updates every weight in the model — for a multi-billion parameter model that means storing gradients and optimizer state for billions of numbers, requiring far more GPU memory than most setups have. LoRA freezes the entire original model and instead trains a small pair of new matrices added on top of a few layers — typically well under 1% of the original parameter count — which is what makes it feasible to fine-tune even fairly large models on a single consumer or free-tier GPU.
+
+**Q: What does the "Q" in QLoRA add on top of LoRA?**
+A: Quantization — the frozen base model's weights are loaded in 4-bit precision instead of the usual 16/32-bit, cutting memory further. This is purely a memory optimization to fit training into limited GPU memory; it isn't part of what teaches the model anything.
+
+**Q: What is a fine-tuning "dataset," concretely?**
+A: A list of (input, desired output) example pairs. Training repeatedly shows the model "when you see something shaped like this input, produce something shaped like this output," and gradient updates nudge the weights toward reproducing that pattern more reliably. It's the same underlying idea as any supervised learning dataset — features paired with correct labels — just with text-in/text-out as the shape.
+
+**Q: What goes wrong if the fine-tuning dataset is too small?**
+A: Overfitting/memorization — instead of learning the general pattern, the model memorizes the specific training examples verbatim and fails to generalize to similarly-shaped inputs it wasn't shown. A handful of examples is enough to demonstrate the mechanism for learning purposes, but a real fine-tune needs hundreds to thousands of diverse examples of the target behavior.
+
+**Q: What is catastrophic forgetting?**
+A: Fine-tuning narrowly on one style/domain can degrade the model's general abilities on things UNRELATED to that fine-tuning data — the model becomes biased toward always producing the fine-tuned behavior, even where it's inappropriate. LoRA's "freeze the original weights, only train a small addition" design limits this compared to full fine-tuning (the original capabilities are still there, underneath), but doesn't eliminate the risk entirely.
+
+**Q: What's the difference between supervised fine-tuning (SFT) and RLHF/DPO?**
+A: SFT learns from fixed (input, correct output) pairs — exactly what a training example should produce. RLHF/DPO instead learn from human PREFERENCES between multiple candidate outputs ("response A is better than response B"), without necessarily needing one single "correct" answer written out in advance. Instruction-following/chat models are typically trained with SFT first, then RLHF/DPO on top of that, to further align outputs with what humans actually prefer.
+
+**Q: Why can't you fine-tune a model you only access through an inference API like Groq's?**
+A: An inference API serves a fixed, already-trained model for you to call — it never exposes the underlying weights for you to modify. Fine-tuning requires loading and training the actual weights yourself (or using a provider's dedicated fine-tuning service, which is a distinct product from a plain inference endpoint), so the model being fine-tuned has to be one you can load directly, not one accessed purely through a chat-completions-style API.
+
 ---
 
 ## The compressed cheat-sheet (read this the morning of the interview)
@@ -816,3 +863,4 @@ A: Sandboxing (isolating tool execution from the host process/filesystem), confi
 | 4 | No proof any of the above helps | Golden set + metrics | Precision/Recall/MRR/HitRate (retrieval); RAGAS Faithfulness/Relevancy/Context Precision/Recall (generation) |
 | 5 | Retrieved documents can be adversarial | Guardrails | Input-side injection detection + prompt hardening; output-side validation + PII redaction |
 | 6 | Need branching/looping/multi-agent, and tools with real consequences | LangGraph + Agent Harness | Graph with conditional edges + shared state; permission gate before execution |
+| 7 | Model needs a new skill/format/style, not just new facts | Fine-tuning (LoRA/QLoRA) | Freeze base model, train small added matrices on (input, output) pairs |
