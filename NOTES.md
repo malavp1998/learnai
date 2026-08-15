@@ -274,6 +274,72 @@ final_state = app.invoke({"messages": [...], "topic": "ISRO", "research_notes": 
 
 ---
 
+## 8. `08_hybrid_search.py` — Hybrid Search: BM25 + Semantic, fused with RRF
+
+**The problem:** pure semantic search (file 06) matches on *meaning*, so it can miss questions that hinge on an exact keyword, ID, or rare term the embedding model doesn't weight heavily. Pure keyword search (BM25) is the opposite — great at exact terms, blind to paraphrasing (`"leave policy"` vs `"time off rules"` share almost no words). Hybrid search runs both and merges the results.
+
+**Key concepts:**
+- **BM25** — a statistical keyword-ranking algorithm (no embeddings, no API call), scoring chunks by term overlap while weighting *rare* words higher than common ones.
+- **Reciprocal Rank Fusion (RRF)** — merges two ranked lists by **rank position**, not raw score (`rrf_score += 1 / (k + rank)`, `k=60` standard), because BM25 scores and cosine-similarity scores aren't on the same scale and can't be averaged directly. A chunk ranking well in *both* lists outscores one that's #1 in only one.
+- This file's own printed output ("BM25 top matches" vs "Semantic top matches" vs "Fused matches") only lets you *eyeball* whether fusion helped — it doesn't give you a number. That gap is exactly what file 09 closes.
+
+---
+
+## 9. `09_retrieval_evaluation.py` — Retrieval Evaluation: Precision@k, Recall@k, MRR, Hit Rate
+
+**Why this file exists:** file 08 claims hybrid search should retrieve better than either method alone, but never actually measures it — it just prints three lists side by side. You can't turn "looks better" into "measurably better" without two things: (1) a **golden test set** — questions where you already know the correct answer, and (2) **metrics** that score a ranked list of retrieved chunks against that known-correct answer. This file builds both, then runs BM25-only, semantic-only, and RRF-fused through the same scorer so the comparison is a real number instead of eyeballing.
+
+```python
+# The golden test set — (question, expected_source_file) pairs, hand-written
+# by reading docs/*.txt and asking "what would a user ask that this answers?"
+GOLDEN_SET = [
+    ("How many days of paid annual leave do full-time employees get?", "company_leave_policy.txt"),
+    ("What is the exact monthly price of the Starter plan?", "product_pricing.txt"),
+    ("What are the time off rules for employees at this company?", "company_leave_policy.txt"),
+    # ...
+]
+
+def precision_at_k(retrieved_sources, relevant_source, k):
+    top_k = retrieved_sources[:k]
+    hits = sum(1 for s in top_k if s == relevant_source)
+    return hits / len(top_k)
+
+def reciprocal_rank(retrieved_sources, relevant_source):
+    for rank, source in enumerate(retrieved_sources, start=1):
+        if source == relevant_source:
+            return 1.0 / rank
+    return 0.0
+
+# Run every retriever over the whole golden set, average each metric
+def evaluate(retriever_name, retrieve_fn, k=3):
+    ...  # loops GOLDEN_SET, calls retrieve_fn(question), scores it, averages
+```
+
+**Key concepts:**
+
+- **The golden set is the whole foundation.** Every metric below is meaningless without it — it's the only place "correct" is defined. This file hand-labels 10 questions by reading the actual `docs/*.txt` content (the same approach as Q1 in the "manual labeling" method — see interview Q's below for the alternatives: synthetic LLM-generated questions, or mined production logs).
+- **Two questions are deliberately adversarial**, not easy lookups: one hinges on an exact number (₹499 Starter plan price) that BM25's keyword match suits well; one is phrased with *none* of the source document's exact wording ("time off rules" vs the doc's "leave policy"), which is designed to make BM25 miss and force semantic/hybrid to prove their worth. Without adversarial cases like this, every retriever scores 100% and the comparison teaches you nothing.
+- **`precision_at_k`** — of the top-k chunks *returned*, what fraction were actually relevant? Punishes noise (returning junk alongside the right answer).
+- **`recall_at_k`** — was the relevant chunk found *anywhere* in top-k? Punishes missing the right answer entirely. (With exactly one relevant source per question here, recall collapses to a 0/1 flag; with multiple relevant chunks per question it becomes a genuine fraction, same as precision.)
+- **`reciprocal_rank`** (→ averaged into **MRR**, Mean Reciprocal Rank) — `1 / rank of the first correct hit`. Rewards ranking the right chunk *early*: a hit at rank 1 scores 1.0, a hit at rank 3 scores 0.33, a miss scores 0. This is the metric that punishes "technically found it, but buried at rank 5."
+- **`hit_rate_at_k`** — binary version of recall: did we get *at least one* relevant chunk in top-k, yes/no. The simplest metric to reason about, and the one to reach for first when sanity-checking a retriever.
+- **Averaging across the whole golden set, not one question** — a single question's score is noisy (one lucky or unlucky match swings it to 0 or 1). Every metric above gets computed per-question, then averaged across all 10 to get the number that's actually meaningful to compare between retrievers.
+- **Reused, not reimplemented, from file 08** — `bm25_retriever`, `semantic_retriever`, and `reciprocal_rank_fusion` are the exact same objects/logic as `08_hybrid_search.py`; file 09 only adds the scoring layer on top. No new dependencies were needed.
+
+**Verified in testing (run live):**
+
+| Retriever | Precision@3 | Recall@3 | MRR | HitRate@3 |
+|---|---|---|---|---|
+| BM25 only | 0.67 | 0.90 | 0.93 | 0.90 |
+| Semantic only | 1.00 | 1.00 | 1.00 | 1.00 |
+| Hybrid (RRF) | 0.77 | 1.00 | 1.00 | 1.00 |
+
+**Honest reading of this result** — semantic-only actually wins outright here, not hybrid. On this small, single-topic-per-doc corpus, embeddings alone handle every question including the paraphrased one, so there's no gap left for hybrid to close, and RRF's fusion with BM25's noisier top-3 slightly *drags precision down* (0.77 vs semantic's 1.00). BM25 alone visibly struggles on the paraphrase question ("time off rules"), which is exactly the failure mode it's expected to have. **The lesson this teaches**: hybrid search isn't a free win — its value shows up on corpora/queries where semantic search has real gaps (rare codes, IDs, exact names) for BM25 to compensate for. On an easy, small, cleanly-separated corpus like this one, evaluation can correctly show the simpler method winning — which is precisely why you evaluate instead of assuming the fancier pipeline is automatically better.
+
+**What this file deliberately does NOT cover** (see the earlier discussion on generation evaluation): this only scores *retrieval* — did we fetch the right chunk. It says nothing about whether the LLM's final generated answer is faithful to that chunk. That's a separate evaluation surface (LLM-as-judge faithfulness/relevancy, RAGAS-style), not built here.
+
+---
+
 ## Quick Comparison Table
 
 | File | New concept | Chain shape |
@@ -285,6 +351,8 @@ final_state = app.invoke({"messages": [...], "topic": "ISRO", "research_notes": 
 | 05 | Tool calling, `ToolMessage`, agent loop | `llm.bind_tools([...])`, loop until no `tool_calls` |
 | 06 | RAG — embeddings, chunking, retrieval | `retriever \| format \| prompt \| llm \| parser` |
 | 07 | LangGraph — nodes, conditional edges, loops, multi-agent state sharing | `StateGraph` with cycles, routed by a supervisor node |
+| 08 | Hybrid search — BM25 + semantic, fused with RRF | `[bm25_retriever, semantic_retriever] → reciprocal_rank_fusion → prompt \| llm \| parser` |
+| 09 | Retrieval evaluation — Precision@k, Recall@k, MRR, Hit Rate@k | golden set → `evaluate(retriever, k)` averaged over all questions |
 
 ---
 
@@ -424,12 +492,66 @@ A: Yes — `reciprocal_rank_fusion()` takes `ranked_lists: list[list]`, any numb
 
 ---
 
+# `09_retrieval_evaluation.py` — Retrieval Evaluation (Precision@k, Recall@k, MRR, Hit Rate)
+
+Reuses `bm25_retriever`, `semantic_retriever`, and `reciprocal_rank_fusion` exactly as built in `08_hybrid_search.py` — this file adds a golden test set and a scoring layer on top, so "is hybrid better?" gets answered with a number instead of eyeballed from printed lists.
+
+**Q1: Why do you need a "golden test set" — why can't you evaluate retrieval without one?**
+A: Every metric (precision, recall, MRR, hit rate) is a comparison between what was retrieved and what SHOULD have been retrieved. Without a known correct answer per question, there's nothing to compare against — you could print retrieved chunks all day and still have no number for "is this good." The golden set (`GOLDEN_SET` — a list of `(question, expected_source_file)` pairs) is what makes every downstream metric possible; it's the ground truth the whole evaluation is built on.
+
+**Q2: How was this project's golden set built, and what are the alternatives in production?**
+A: Here, by hand — reading the actual `docs/*.txt` content and writing realistic questions each doc answers (manual labeling). This works well for a small set (~10-20 questions) and gives the highest-quality labels since a human verified relevance directly. At scale, teams instead use synthetic generation (ask an LLM to write a question from each chunk, so the answer key is automatic) for speed, or mine real production query logs plus user engagement signals (clicks, thumbs-up, non-rephrased follow-ups) for the most realistic signal — at the cost of needing real traffic first.
+
+**Q3: What's the difference between Precision@k and Recall@k?**
+A: Precision@k asks "of the k chunks we returned, how many were actually relevant?" — it punishes returning noise alongside the right answer. Recall@k asks "of the relevant chunks that exist, how many did we actually find in our top-k?" — it punishes missing the right answer entirely, regardless of what else got returned. A retriever can have perfect recall (found everything relevant) but poor precision (buried it in junk), or vice versa.
+
+**Q4: Why does this file's Recall@k collapse to just 0 or 1 per question instead of a fraction?**
+A: Because the golden set labels exactly ONE relevant source file per question. Recall = (relevant chunks found) / (relevant chunks that exist) = either 0/1 or 1/1 when there's only one possible relevant chunk. With a richer golden set where a question can be answered by several different chunks, recall would become a genuine fraction, same shape as precision.
+
+**Q5: What does MRR (Mean Reciprocal Rank) capture that Recall@k doesn't?**
+A: Recall@k only asks "was the right chunk anywhere in the top-k" — a hit at rank 1 and a hit at rank k score identically. MRR (`1 / rank of the first correct hit`, averaged across all questions) specifically rewards ranking the correct chunk EARLY: a hit at rank 1 scores 1.0, at rank 2 scores 0.5, at rank 3 scores 0.33. Two retrievers can have identical Recall@3 while one consistently ranks the right answer 1st and the other buries it at 3rd — MRR is what exposes that difference.
+
+**Q6: What's the difference between Recall@k and Hit Rate@k — aren't they the same thing?**
+A: In THIS file, yes — they're numerically identical, because there's exactly one relevant source per question, so "fraction of relevant chunks found" and "was at least one relevant chunk found" collapse to the same 0/1 value. They diverge once a question can have multiple correct chunks: Recall@k becomes a fraction (e.g. found 2 of 3 relevant chunks = 0.67), while Hit Rate@k stays strictly binary (found at least one = 1, regardless of how many). Both are still standard, separate metrics in production retrieval evals for that reason.
+
+**Q7: Why are two of the golden set's questions deliberately "adversarial"?**
+A: If every golden question is an easy, obvious lookup, every retriever scores near 100% and the comparison teaches you nothing — you learn nothing about WHERE each method breaks down. Q8 ("exact monthly price of the Starter plan") hinges on a specific number BM25's keyword matching is well suited to find. Q9 ("time off rules") deliberately avoids every exact word the source document uses ("leave policy"), which pure keyword search (BM25) is structurally unable to bridge — only meaning-based (semantic) search can connect the two. These are the cases actually designed to make BM25-only and semantic-only diverge in the results table.
+
+**Q8: In the live run, semantic-only scored BETTER than hybrid (RRF) — doesn't that mean hybrid search failed?**
+A: No — it means hybrid isn't a universal win, and that's the honest, useful outcome of running a real evaluation instead of assuming the fancier pipeline always wins. On this small, cleanly topic-separated corpus, semantic search alone already handled every question including the paraphrase-heavy one, leaving no gap for hybrid to close; meanwhile fusing in BM25's noisier results slightly diluted precision. Hybrid search's actual value shows up on corpora/queries where semantic search has real blind spots — rare exact terms, codes, IDs, names — for BM25 to compensate for. The lesson is: you evaluate BEFORE assuming a more sophisticated method is automatically better, and the evaluation can legitimately tell you the simpler method wins for your specific data.
+
+**Q9: This file evaluates retrieval — does that also tell you if the LLM's final answer is correct?**
+A: No — retrieval evaluation only proves whether the RIGHT CHUNK was fetched, not whether the LLM's generated answer faithfully used it. Those are two separate evaluation surfaces: retrieval metrics (this file) catch "wrong/missing context went into the prompt," while generation metrics (not built here — e.g. LLM-as-judge faithfulness/relevancy, RAGAS-style) catch "right context went in, but the model still hallucinated or ignored it." A RAG system needs both evaluated separately to know which stage to fix when an answer is wrong.
+
+**Q10: Why does `evaluate()` average metrics across the WHOLE golden set instead of reporting per-question scores?**
+A: A single question's score is noisy — one lucky or unlucky match swings precision/recall to 0 or 1 with no in-between, telling you little about the retriever's general behavior. Computing each metric per question, then averaging across all 10 golden questions, is what produces a number stable and meaningful enough to actually compare BM25 vs semantic vs hybrid by — this is standard practice in IR (information retrieval) evaluation generally, not specific to this project.
+
+---
+
+# `10_reranking.py` — Cross-Encoder Reranking on Top of Hybrid Search
+
+Adds a second retrieval-quality stage on top of `08_hybrid_search.py`: RRF's fused candidate pool gets re-scored by a cross-encoder before the final top-k reaches the LLM. `09_retrieval_evaluation.py` was extended with a fourth "Hybrid+Reranked" row to measure whether this actually helps.
+
+**Q1: What's the actual difference between the bi-encoder (`08_hybrid_search.py`'s semantic retriever) and the cross-encoder used here?**
+A: A bi-encoder embeds the query and each document SEPARATELY, in isolation — that's what makes it fast, since every chunk's embedding is precomputed once and just compared with cheap vector math at query time. A cross-encoder takes the query and ONE document TOGETHER as a single input and lets the model attend between every word of both — much more accurate, because it can reason about how the two specifically relate, but it has to re-run the full model live for every (query, document) pair, so there's nothing to precompute ahead of time.
+
+**Q2: If cross-encoders are more accurate, why not use one for all retrieval instead of bi-encoders + BM25 + RRF?**
+A: Cost. A cross-encoder scores one pair at a time and can't be precomputed — running it against every chunk in a large corpus, for every query, would be far too slow. The standard pattern is a two-stage funnel: cheap retrieval (BM25 + embeddings + RRF) narrows a large corpus down to a small candidate pool cheaply (this file uses top 8), and only THEN does the expensive, accurate cross-encoder rerank that small pool (down to top 3). Retrieval optimizes for recall cheaply; reranking optimizes for precision expensively, but only on a handful of candidates.
+
+**Q3: Did adding a reranker actually improve anything, or is it just extra complexity?**
+A: Measured, not assumed: `09_retrieval_evaluation.py`'s results table shows Hybrid (RRF) alone scoring 0.80 Precision@3, and Hybrid+Reranked scoring 0.97 Precision@3 on the same 10-question golden set — a real, verified improvement, not a guess. Recall/MRR/HitRate were already at 1.00 for both (the right chunk was always somewhere in the results), so reranking's actual contribution here is precision — putting the right chunk in the TOP slots more reliably, not finding chunks that weren't being found before.
+
+**Q4: Why does `09_retrieval_evaluation.py` set `RETRIEVER_K = 8` instead of leaving it at the original 5?**
+A: Reranking needs a genuinely wide candidate pool to choose from — if BM25 and semantic search each only return 5 candidates, RRF's fused pool is capped low regardless of what top_n you ask reranking for. Bumping both retrievers to return 8 candidates each (matching `10_reranking.py`'s `CANDIDATE_POOL_SIZE`) gives the reranker real material to discriminate between. The BM25-only and Semantic-only rows are unaffected by this change since `evaluate()` still slices to `retrieved_sources[:k]` (k=3) when scoring those.
+
+---
+
 ## What's Next
 
 Not built yet, in order of natural progression:
-1. **Reranking** — a cross-encoder model re-scores the fused top-k for even tighter precision before hitting the LLM
+1. **Query transformation** — query rewriting, multi-query decomposition, and HyDE (Hypothetical Document Embeddings), addressing cases where the user's raw question is a poor search query regardless of how good retrieval + reranking are
 2. **Structured output** — force reliable JSON/Pydantic output from the model
-3. **Evaluation** — testing whether a prompt/RAG change actually improved results
+3. **Tool-calling reliability** — retries on malformed tool calls, strict schema validation, error-recovery in the agent loop from `05_tool_calling.py`
 4. **LangGraph persistence** — `checkpointer` + `interrupt_before` for human-in-the-loop and resumable runs
 
 ---
