@@ -6,3 +6,6 @@ httpx
 langchain-groq
 langchain-text-splitters
 pydantic-settings
+ragas
+openai
+sentence-transformers
