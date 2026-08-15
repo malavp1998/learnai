@@ -25,8 +25,7 @@ import json
 from langchain_core.messages import SystemMessage
 from langchain_groq import ChatGroq
 
-from db import search_similar_chunks
-from embeddings import embed
+from hybrid_search import hybrid_search
 from settings import settings
 
 llm = ChatGroq(model="openai/gpt-oss-20b", api_key=settings.groq_api_key)
@@ -53,16 +52,13 @@ async def stream_chat_response(question: str):
     pulls from this generator and writes each piece straight to the open
     HTTP connection — no waiting for the generator to finish.
     """
-    # Step 1: embed the question (task="retrieval.query" — matches the
-    # "retrieval.passage" task used when each note's description was
-    # embedded on creation, in main.py's POST /api/notes; using matched
-    # tasks is what makes the similarity search work well).
-    [query_vector] = await embed([question], task="retrieval.query")
-
-    # Step 2: pgvector similarity search over note_chunks — same role as
-    # the FAISS retriever in 06_rag_basics.py, just backed by a real
-    # database, searching notes the user has added instead of static files.
-    chunks = await search_similar_chunks(query_vector, k=3)
+    # Step 1+2: hybrid retrieval — runs Postgres full-text (keyword) search
+    # and pgvector (semantic) search over note_chunks CONCURRENTLY, then
+    # fuses the two ranked lists with Reciprocal Rank Fusion. See
+    # hybrid_search.py for the full explanation of why hybrid beats either
+    # search alone, and how RRF merges two differently-scaled ranking
+    # systems into one.
+    chunks = await hybrid_search(question, k=3)
 
     sources = [c["source"] for c in chunks]
     # First SSE event: tell the frontend which sources were retrieved,

@@ -60,8 +60,26 @@ async def init_db() -> None:
                 id SERIAL PRIMARY KEY,
                 note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
                 content TEXT NOT NULL,
-                embedding VECTOR({EMBEDDING_DIM}) NOT NULL
+                embedding VECTOR({EMBEDDING_DIM}) NOT NULL,
+                content_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
             )
+        """)
+        # Migration for a note_chunks table that already existed before
+        # content_tsv was added — CREATE TABLE IF NOT EXISTS above is a
+        # no-op against an existing table, so a deployment created before
+        # this column existed needs it backfilled explicitly here. Safe to
+        # run every startup: the IF NOT EXISTS makes it a no-op once the
+        # column is already there.
+        await conn.execute("""
+            ALTER TABLE note_chunks
+            ADD COLUMN IF NOT EXISTS content_tsv TSVECTOR
+                GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+        """)
+        # GIN index makes the keyword (full-text) search below an index scan
+        # instead of a sequential scan over every chunk's tsvector.
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS note_chunks_tsv_idx
+            ON note_chunks USING GIN (content_tsv)
         """)
 
 
@@ -99,11 +117,15 @@ async def insert_note_chunks(note_id: int, rows: list[tuple[str, list[float]]]) 
         )
 
 
-async def search_similar_chunks(query_embedding: list[float], k: int = 3) -> list[dict]:
+async def search_similar_chunks(query_embedding: list[float], k: int = 5) -> list[dict]:
     """
     Top-k nearest note chunks to the query embedding, using cosine distance
     (`<=>`, a pgvector operator — smaller distance = more similar). Joins
     back to `notes` so callers get the note's title alongside the matched chunk.
+
+    This is the SEMANTIC half of hybrid search — see hybrid_search.py,
+    which calls this alongside a keyword (full-text) search and fuses the
+    two ranked lists together.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -116,6 +138,43 @@ async def search_similar_chunks(query_embedding: list[float], k: int = 3) -> lis
             LIMIT $2
             """,
             query_embedding,
+            k,
+        )
+    return [{"source": r["source"], "content": r["content"]} for r in records]
+
+
+async def search_keyword_chunks(question: str, k: int = 5) -> list[dict]:
+    """
+    Top-k note chunks ranked by Postgres full-text search — the KEYWORD half
+    of hybrid search, replacing the earlier in-memory BM25 pass. See
+    hybrid_search.py, which calls this alongside search_similar_chunks
+    (the semantic half) and fuses the two ranked lists together.
+
+    plainto_tsquery() turns the raw question into a tsquery by tokenizing +
+    stemming it the same way content_tsv was built (both use the 'english'
+    text search config, which matters — a mismatched config means stemmed
+    forms don't line up and matches get missed). ts_rank() scores each
+    matching row by term frequency, same spirit as BM25's term-frequency
+    term, just Postgres's own ranking function instead of a Python library.
+
+    Unlike the old get_all_chunks() (which pulled every chunk into Python
+    and ran BM25 there), this pushes the entire keyword search into
+    Postgres — the GIN index on content_tsv (see init_db) makes it an
+    index scan, not a full table scan, and no chunk text crosses the
+    network except the top-k rows actually returned.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        records = await conn.fetch(
+            """
+            SELECT notes.title AS source, note_chunks.content AS content
+            FROM note_chunks
+            JOIN notes ON notes.id = note_chunks.note_id
+            WHERE note_chunks.content_tsv @@ plainto_tsquery('english', $1)
+            ORDER BY ts_rank(note_chunks.content_tsv, plainto_tsquery('english', $1)) DESC
+            LIMIT $2
+            """,
+            question,
             k,
         )
     return [{"source": r["source"], "content": r["content"]} for r in records]
