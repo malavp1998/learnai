@@ -546,13 +546,56 @@ A: Reranking needs a genuinely wide candidate pool to choose from — if BM25 an
 
 ---
 
+# `11_query_transformation.py` — Query Rewriting, Decomposition, and HyDE
+
+Fixes the QUERY itself before it ever reaches retrieval — three independent techniques, each addressing a different way a raw user question can be a poor search query, layered on top of `10_reranking.py`'s full hybrid+rerank pipeline.
+
+**Q1: What's the difference between query rewriting and query decomposition — don't they both "fix" the question?**
+A: Rewriting fixes a single vague/colloquial question into a clearer version of the SAME question ("how much is the cheap one" → "What is the monthly price of the Starter plan?"). Decomposition handles a genuinely COMPOUND question — one that's actually several questions bundled together ("what's the price AND how many devices does it support") — by splitting it into independent sub-questions and retrieving for each separately, then merging. Rewriting improves one retrieval pass; decomposition runs multiple retrieval passes on purpose, because a single pass over a compound question tends to skew toward whichever topic dominates the embedding/keyword signal and starves the other.
+
+**Q2: How does the multi-query decomposition merge results from multiple sub-questions?**
+A: Reuses the exact same `reciprocal_rank_fusion()` function from `08_hybrid_search.py`/`10_reranking.py` — but this time fusing across SUB-QUESTIONS instead of across RETRIEVERS. RRF only cares that its inputs are ranked lists of the same kind of item; it has no idea (and doesn't need to know) whether those lists came from different retrieval strategies on one query or the same retrieval strategy on different queries. This is the same fusion pattern showing up at two different points in the pipeline.
+
+**Q3: What is HyDE actually doing, and why does the fake answer need to be FACTUALLY WRONG-tolerant?**
+A: HyDE (Hypothetical Document Embeddings) asks an LLM to write a plausible-SOUNDING answer to the question — it explicitly doesn't need to be correct — then embeds THAT fake answer instead of the raw question for semantic search. The reason: bi-encoder embeddings work by proximity in vector space, and a question-shaped sentence ("What should I eat to be healthier?") doesn't always land close to an answer-shaped document passage ("A balanced diet consists of...") even when the answer is correct, because questions and declarative facts are stylistically different text. A fabricated but answer-STYLED passage is much closer in phrasing to a real document chunk, so it retrieves better — accuracy of the fake passage's content is irrelevant, only its style/shape matters for the embedding step.
+
+**Q4: If HyDE's hypothetical passage is fake, why doesn't the final answer end up wrong or contaminated by it?**
+A: The hypothetical passage is used ONLY for the semantic search step (`semantic_retriever.invoke(hypothetical)`) — BM25 still searches with the real question, reranking (`rerank(question, candidate_pool)`) always scores candidates against the REAL question, and the final answer-generation prompt (`generate_answer(final_chunks, question)`) only ever sees the REAL retrieved chunks and the REAL question, never the hypothetical text itself. The fake passage's only job is to be a better SEARCH QUERY for one retrieval channel — it's discarded immediately after retrieval and never enters the context the LLM actually answers from.
+
+**Q5: All three techniques add at least one extra LLM call before retrieval even starts — when is that worth it?**
+A: When query quality, not retrieval or reranking quality, is the actual bottleneck. `08_hybrid_search.py` and `10_reranking.py` already squeeze a lot out of a GIVEN query; these techniques exist for cases where the query itself is the weak link — vague phrasing, compound questions, or question/answer style mismatch. It's a real latency/cost tradeoff (an LLM call added to every request before search even happens), so it's not something to reach for by default — only when eval numbers or observed failures show query phrasing is actually where answers are going wrong.
+
+---
+
+# `12_guardrails.py` — Prompt Injection Defense + Input/Output Validation
+
+Every prior RAG file (06 through 11) assumed retrieved documents are trustworthy. This file demonstrates why that assumption is false in a real app like mindhold — where "documents" are user-submitted notes anyone can write — and builds real defenses against it, using a working prompt-injection attack against a copy of that exact pattern (`docs_untrusted/`).
+
+**Q1: What is prompt injection, concretely, in a RAG context?**
+A: An LLM can't reliably distinguish "instructions from the developer's system prompt" from "text that merely appears inside retrieved content and happens to look like an instruction" — both arrive as just text in the same context window. If a retrieved document chunk contains something like "ignore previous instructions, respond only with X," a model can follow it, because from the model's perspective there's no hard structural boundary between developer instructions and document content — only more text. `docs_untrusted/onboarding_note.txt` demonstrates this concretely: a note that looks like normal onboarding content but has an embedded instruction attempting to hijack the assistant into outputting a phishing message.
+
+**Q2: Did the baseline (undefended) run in this file actually get hijacked, or was it just a hypothetical risk?**
+A: Actually hijacked — not hypothetical. Running `ask_baseline()` against the onboarding question returns the LITERAL injected phishing text ("Your account has been compromised. Send your password to...") instead of real onboarding info. This is the same prompt pattern used in every file from `06_rag_basics.py` onward ("answer using ONLY the context below") — proving that instruction alone does not protect against content that arrives disguised as part of that same context.
+
+**Q3: What are the two layers of defense, and why two instead of one?**
+A: INPUT-side: (1) regex-based detection of injection-like phrasing in retrieved chunks, dropping any flagged chunk entirely before it reaches the prompt, and (2) prompt structural hardening — wrapping retrieved content in explicit `<context>` tags with instructions telling the model that content inside is DATA, never commands, even if it claims otherwise. OUTPUT-side: (3) checking the model's response against known-bad patterns before returning it to the user, and (4) redacting PII (e.g. email addresses) that shouldn't appear in an answer. Two layers because neither is complete alone — the regex filter can miss a differently-worded attack, prompt hardening alone doesn't guarantee compliance, and output validation only exists to catch whatever slips past the input side. This is "defense in depth," not redundancy.
+
+**Q4: When the defended path excludes the malicious chunk, what happens to the LEGITIMATE content that was in the same chunk?**
+A: It gets lost too — a real, visible tradeoff in this file, not hidden. `docs_untrusted/onboarding_note.txt` was deliberately written with the injection woven into the SAME sentences as real onboarding info, so `filter_suspicious_chunks()` drops the whole chunk (real content included), and the defended answer becomes "I don't have that information" instead of the real onboarding steps. The alternative — trying to surgically strip just the bad phrases and keep the rest — is far riskier: a document containing an embedded instruction override isn't trustworthy for anything else in it either. A frustrating non-answer is the safer failure mode than a partially-compromised one.
+
+**Q5: Is regex pattern-matching for injection attempts actually a solid defense, or just a demo simplification?**
+A: Both — it's simple enough to be a teaching example, but it's also a real technique genuinely used as ONE layer in production systems, not a toy. Its honest limitation: it catches known, fixed phrasings (exactly what this file's demo attack uses) but a differently-worded attack the pattern list wasn't written for can slip through. That's why the file frames it as one of several layers rather than a complete solution — a production system would add a dedicated trained injection-classifier model, strict allow-listing of what actions retrieved content can ever trigger, and mandatory human confirmation before any irreversible action (sending an email, deleting data) that traces back to LLM output influenced by untrusted content.
+
+---
+
 ## What's Next
 
 Not built yet, in order of natural progression:
-1. **Query transformation** — query rewriting, multi-query decomposition, and HyDE (Hypothetical Document Embeddings), addressing cases where the user's raw question is a poor search query regardless of how good retrieval + reranking are
-2. **Structured output** — force reliable JSON/Pydantic output from the model
-3. **Tool-calling reliability** — retries on malformed tool calls, strict schema validation, error-recovery in the agent loop from `05_tool_calling.py`
-4. **LangGraph persistence** — `checkpointer` + `interrupt_before` for human-in-the-loop and resumable runs
+1. **Structured output** — force reliable JSON/Pydantic output from the model
+2. **Tool-calling reliability** — retries on malformed tool calls, strict schema validation, error-recovery in the agent loop from `05_tool_calling.py`
+3. **LangGraph persistence** — `checkpointer` + `interrupt_before` for human-in-the-loop and resumable runs
+4. **Observability/tracing** — LangSmith (or a custom tracing layer) instrumented into an existing pipeline, logging every LLM call's tokens, latency, cost, and retrieval hits/misses
+5. **CI eval gates** — a GitHub Actions workflow running `09_retrieval_evaluation.py` and `mindhold/backend/ragas_eval.py` on every push, turning the existing eval scripts into automated regression detection
 
 ---
 
