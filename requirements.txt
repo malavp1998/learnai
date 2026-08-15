@@ -10,3 +10,10 @@ numpy<2
 python-dotenv
 langgraph
 rank-bm25
+llm-guard
+presidio-analyzer
+presidio-anonymizer
+# Pinned: spacy>=3.8 requires Python 3.10+ (no wheel for 3.9). This repo's
+# venv is 3.9, and llm-guard/presidio both depend on spacy transitively —
+# pin explicitly or pip will try to install an incompatible newer version.
+spacy==3.7.5

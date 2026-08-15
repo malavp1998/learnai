@@ -588,6 +588,51 @@ A: Both — it's simple enough to be a teaching example, but it's also a real te
 
 ---
 
+# `13_guardrails_libraries.py` — Guardrails with Production Libraries (LLM Guard + Presidio)
+
+The same attack from `12_guardrails.py`, defended with real industry-standard tooling instead of hand-rolled regex — LLM Guard's trained `PromptInjection` classifier replaces the fixed pattern list, and Microsoft Presidio's NER-based PII detection replaces the single email regex.
+
+**Q1: What's the actual difference between this file's detection and `12_guardrails.py`'s regex?**
+A: `12_guardrails.py` matches literal, pre-written patterns — it can only catch phrasings someone anticipated and wrote a regex for. LLM Guard's `PromptInjection` scanner is a trained classifier model — it outputs a confidence *score* for how injection-like a text is, generalizing to phrasings never seen before, the same way any ML classifier generalizes beyond its exact training examples. The tradeoff: a real model inference per chunk (slower than a string match) and a threshold to tune (precision/recall tradeoff — lower threshold = stricter = more false positives).
+
+**Q2: Why does this file still reuse `12_guardrails.py`'s `HARDENED_PROMPT` unchanged?**
+A: Because prompt structure (the `<context>` tags + "this is data, not instructions" framing) is prompt *engineering*, not a detection problem — no library scans-and-decides its way around needing a well-written system prompt. Guardrail libraries handle DETECTION (is this input/output suspicious); the structural defense is still the developer's job, regardless of which detection tooling sits alongside it.
+
+**Q3: What does Presidio actually detect that a single `EMAIL_RE` regex misses?**
+A: Presidio uses NER (Named Entity Recognition — a real NLP model reasoning about context and structure) to catch names, phone numbers, addresses, and credit card numbers, without a regex written per entity type. `demo_presidio()`'s sample text contains a person's name and a phone number alongside an email — a regex built only for emails would silently miss the other two entirely.
+
+**Q4: LLM Guard's `Sensitive` scanner already does PII detection — why does this file also show Presidio standalone?**
+A: `Sensitive` uses Presidio *internally*, but Presidio is commonly used directly too, outside the specific context of scanning an LLM's input/output — e.g. scrubbing PII from raw documents *before* they're even embedded and stored, which isn't an "LLM scan" at all. Showing it standalone here demonstrates it's a general-purpose PII tool, not something married to LLM Guard.
+
+---
+
+# `14_agent_harness.py` — A Minimal Agent Harness (the loop + permission gate + tool executor)
+
+Generalizes `05_tool_calling.py`'s tool-calling loop into what tools like Claude Code, Cursor, and Aider actually are under the hood: a loop that lets an LLM request real actions, plus a permission gate deciding what's safe to run automatically vs. what needs a human's okay — the one piece `05_tool_calling.py` skips entirely because all its tools (multiply, add, a price lookup) are harmless and side-effect-free.
+
+**Q1: What is an "agent harness," in one sentence?**
+A: The surrounding program that turns a plain LLM (text-in, text-out, unable to affect anything) into something that can actually act — by looping it against tools, executing what it requests, gating what's safe to run automatically vs. what needs approval, and feeding real results back so it can plan its next step. Claude Code itself, and every AI coding agent (Cursor, Aider, Copilot's agent mode), is this loop, industrialized.
+
+**Q2: How is this file's loop different from `05_tool_calling.py`'s loop, structurally?**
+A: Structurally almost identical — invoke, check `tool_calls`, execute, append a real `ToolMessage`, repeat until no more tool calls or `max_steps` is hit (see `run_agent()`). The one new piece is `execute_tool_call()` routing every call through `request_permission()` FIRST — `05_tool_calling.py` had no equivalent because none of its tools had real-world consequences; this file's `run_shell_command` tool can mutate or delete state, so unconditional auto-execution isn't safe anymore.
+
+**Q3: Why are `list_directory` and `read_file` auto-approved but `run_shell_command` always asks?**
+A: They represent different trust tiers. `list_directory` is read-only and low-risk. `read_file` is read-only but path-sensitive (could read a secrets file) — mitigated here by `PROJECT_ROOT` containment (any path that resolves outside the project directory is refused, not just politely declined). `run_shell_command` can run arbitrary commands with real side effects (delete files, install packages, exfiltrate data), so it's deliberately excluded from `AUTO_APPROVED_TOOLS` — every call goes through a human `input()` prompt, no exceptions, regardless of how safe the requested command looks.
+
+**Q4: If a human approves a shell command, is it guaranteed to run?**
+A: No — approval is necessary but not sufficient. `run_shell_command` checks the command text against `DENYLISTED_COMMAND_PATTERNS` (`rm -rf`, `sudo`, `mkfs`, a fork bomb pattern, etc.) BEFORE executing, even after a human says yes. This models a real harness design principle: a human approving a tool call is one safety layer, not the only one — some actions should be refused by the harness itself regardless of who approved them, since a human can misjudge a command's actual effect just as easily as a model can.
+
+**Q5: What stops `read_file` from reading something like `/etc/passwd` or a file outside this project?**
+A: `(PROJECT_ROOT / path).resolve()` followed by checking the resolved absolute path actually starts with `PROJECT_ROOT` — this catches both `../../etc/passwd`-style traversal AND absolute paths that point outside the project, because `.resolve()` collapses `..` segments before the containment check runs. Verified in testing: `read_file.invoke({"path": "../../etc/passwd"})` returns `"ERROR: path escapes the project root, refused."` rather than the file's contents.
+
+**Q6: Why does the demo task ("find the space-related doc and tell me a fact") require tool CHAINING instead of one tool call?**
+A: The model doesn't know in advance which filename in `docs/` is about space — it has to call `list_directory` first, see the real filenames, THEN decide `solar_system.txt` is the right one to `read_file`. This mirrors `05_tool_calling.py`'s "can't pre-solve it mentally" principle: a single-tool task risks the model guessing instead of actually using results, while a task that only makes sense as a sequential lookup forces genuine multi-step tool use, provable by checking the transcript shows step 1's real directory listing feeding step 2's file choice.
+
+**Q7: What does this toy harness leave out compared to a real one like Claude Code?**
+A: A lot, by design — this file is the minimal skeleton showing the core mechanism (loop, executor, gate), not a production system. Missing: sandboxing (this file's tools run with the same permissions as the Python process itself, not in an isolated environment), configurable permission MODES (auto-accept-all vs. ask-every-time vs. project-specific allow/deny lists, rather than one fixed set), audit logging, cost/token tracking across a long session, and far more tools (web search, browser control, structured file editing/diffing). The permission gate and denylist shown here are the real mechanism in miniature, not a complete implementation of it.
+
+---
+
 ## What's Next
 
 Not built yet, in order of natural progression:
@@ -596,6 +641,7 @@ Not built yet, in order of natural progression:
 3. **LangGraph persistence** — `checkpointer` + `interrupt_before` for human-in-the-loop and resumable runs
 4. **Observability/tracing** — LangSmith (or a custom tracing layer) instrumented into an existing pipeline, logging every LLM call's tokens, latency, cost, and retrieval hits/misses
 5. **CI eval gates** — a GitHub Actions workflow running `09_retrieval_evaluation.py` and `mindhold/backend/ragas_eval.py` on every push, turning the existing eval scripts into automated regression detection
+6. **Harness sandboxing** — running `14_agent_harness.py`'s tools inside a container/VM instead of the host process, so even a fully-approved destructive command can't touch the real filesystem
 
 ---
 
